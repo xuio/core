@@ -2,7 +2,7 @@
 
 from unittest.mock import AsyncMock, patch
 
-from telegram import ChatFullInfo, User
+from telegram import AcceptedGiftTypes, ChatFullInfo, User
 from telegram.constants import AccentColor
 from telegram.error import BadRequest, InvalidToken, NetworkError
 
@@ -221,10 +221,29 @@ async def test_create_entry(hass: HomeAssistant) -> None:
 
     # test: invalid proxy url
 
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {
+            CONF_PLATFORM: PLATFORM_WEBHOOKS,
+            CONF_API_KEY: "mock api key",
+            SECTION_ADVANCED_SETTINGS: {
+                CONF_PROXY_URL: "invalid",
+            },
+        },
+    )
+    await hass.async_block_till_done()
+
+    assert result["step_id"] == "user"
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"]["base"] == "invalid_proxy_url"
+    assert result["description_placeholders"]["error_field"] == "proxy url"
+
+    # test: telegram error
+
     with patch(
         "homeassistant.components.telegram_bot.config_flow.Bot.get_me",
     ) as mock_bot:
-        mock_bot.side_effect = NetworkError("mock invalid proxy")
+        mock_bot.side_effect = NetworkError("mock network error")
 
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"],
@@ -232,7 +251,7 @@ async def test_create_entry(hass: HomeAssistant) -> None:
                 CONF_PLATFORM: PLATFORM_WEBHOOKS,
                 CONF_API_KEY: "mock api key",
                 SECTION_ADVANCED_SETTINGS: {
-                    CONF_PROXY_URL: "invalid",
+                    CONF_PROXY_URL: "https://proxy",
                 },
             },
         )
@@ -240,7 +259,8 @@ async def test_create_entry(hass: HomeAssistant) -> None:
 
     assert result["step_id"] == "user"
     assert result["type"] is FlowResultType.FORM
-    assert result["errors"]["base"] == "invalid_proxy_url"
+    assert result["errors"]["base"] == "telegram_error"
+    assert result["description_placeholders"]["error_message"] == "mock network error"
 
     # test: valid input, to continue with webhooks step
 
@@ -370,6 +390,7 @@ async def test_subentry_flow(
             type="PRIVATE",
             max_reaction_count=100,
             accent_color_id=AccentColor.COLOR_000,
+            accepted_gift_types=AcceptedGiftTypes(True, True, True, True),
         ),
     ):
         result = await hass.config_entries.subentries.async_configure(
@@ -438,6 +459,7 @@ async def test_subentry_flow_chat_error(
             type="PRIVATE",
             max_reaction_count=100,
             accent_color_id=AccentColor.COLOR_000,
+            accepted_gift_types=AcceptedGiftTypes(True, True, True, True),
         ),
     ):
         result = await hass.config_entries.subentries.async_configure(
@@ -514,6 +536,7 @@ async def test_import_multiple(
                 type="PRIVATE",
                 max_reaction_count=100,
                 accent_color_id=AccentColor.COLOR_000,
+                accepted_gift_types=AcceptedGiftTypes(True, True, True, True),
             ),
         ),
     ):

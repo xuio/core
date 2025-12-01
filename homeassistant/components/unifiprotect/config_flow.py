@@ -16,13 +16,13 @@ import voluptuous as vol
 
 from homeassistant.config_entries import (
     SOURCE_IGNORE,
-    ConfigEntry,
     ConfigEntryState,
     ConfigFlow,
     ConfigFlowResult,
-    OptionsFlow,
+    OptionsFlowWithReload,
 )
 from homeassistant.const import (
+    CONF_API_KEY,
     CONF_HOST,
     CONF_ID,
     CONF_PASSWORD,
@@ -54,7 +54,7 @@ from .const import (
     MIN_REQUIRED_PROTECT_V,
     OUTDATED_LOG_MESSAGE,
 )
-from .data import async_last_update_was_successful
+from .data import UFPConfigEntry, async_last_update_was_successful
 from .discovery import async_start_discovery
 from .utils import _async_resolve, _async_short_mac, _async_unifi_mac_from_hass
 
@@ -79,7 +79,7 @@ def _host_is_direct_connect(host: str) -> bool:
 
 async def _async_console_is_offline(
     hass: HomeAssistant,
-    entry: ConfigEntry,
+    entry: UFPConfigEntry,
 ) -> bool:
     """Check if a console is offline.
 
@@ -214,6 +214,7 @@ class ProtectFlowHandler(ConfigFlow, domain=DOMAIN):
                         CONF_USERNAME, default=user_input.get(CONF_USERNAME)
                     ): str,
                     vol.Required(CONF_PASSWORD): str,
+                    vol.Required(CONF_API_KEY): str,
                 }
             ),
             errors=errors,
@@ -222,8 +223,8 @@ class ProtectFlowHandler(ConfigFlow, domain=DOMAIN):
     @staticmethod
     @callback
     def async_get_options_flow(
-        config_entry: ConfigEntry,
-    ) -> OptionsFlow:
+        config_entry: UFPConfigEntry,
+    ) -> OptionsFlowHandler:
         """Get the options flow for this handler."""
         return OptionsFlowHandler()
 
@@ -247,6 +248,7 @@ class ProtectFlowHandler(ConfigFlow, domain=DOMAIN):
         session = async_create_clientsession(
             self.hass, cookie_jar=CookieJar(unsafe=True)
         )
+        public_api_session = async_get_clientsession(self.hass)
 
         host = user_input[CONF_HOST]
         port = user_input.get(CONF_PORT, DEFAULT_PORT)
@@ -254,10 +256,12 @@ class ProtectFlowHandler(ConfigFlow, domain=DOMAIN):
 
         protect = ProtectApiClient(
             session=session,
+            public_api_session=public_api_session,
             host=host,
             port=port,
             username=user_input[CONF_USERNAME],
             password=user_input[CONF_PASSWORD],
+            api_key=user_input[CONF_API_KEY],
             verify_ssl=verify_ssl,
             cache_dir=Path(self.hass.config.path(STORAGE_DIR, "unifiprotect")),
             config_dir=Path(self.hass.config.path(STORAGE_DIR, "unifiprotect")),
@@ -286,6 +290,14 @@ class ProtectFlowHandler(ConfigFlow, domain=DOMAIN):
             auth_user = bootstrap.users.get(bootstrap.auth_user_id)
             if auth_user and auth_user.cloud_account:
                 errors["base"] = "cloud_user"
+        try:
+            await protect.get_meta_info()
+        except NotAuthorized as ex:
+            _LOGGER.debug(ex)
+            errors[CONF_API_KEY] = "invalid_auth"
+        except ClientError as ex:
+            _LOGGER.error(ex)
+            errors["base"] = "cannot_connect"
 
         return nvr_data, errors
 
@@ -318,12 +330,18 @@ class ProtectFlowHandler(ConfigFlow, domain=DOMAIN):
         }
         return self.async_show_form(
             step_id="reauth_confirm",
+            description_placeholders={
+                "local_user_documentation_url": await async_local_user_documentation_url(
+                    self.hass
+                ),
+            },
             data_schema=vol.Schema(
                 {
                     vol.Required(
                         CONF_USERNAME, default=form_data.get(CONF_USERNAME)
                     ): str,
                     vol.Required(CONF_PASSWORD): str,
+                    vol.Required(CONF_API_KEY): str,
                 }
             ),
             errors=errors,
@@ -366,13 +384,14 @@ class ProtectFlowHandler(ConfigFlow, domain=DOMAIN):
                         CONF_USERNAME, default=user_input.get(CONF_USERNAME)
                     ): str,
                     vol.Required(CONF_PASSWORD): str,
+                    vol.Required(CONF_API_KEY): str,
                 }
             ),
             errors=errors,
         )
 
 
-class OptionsFlowHandler(OptionsFlow):
+class OptionsFlowHandler(OptionsFlowWithReload):
     """Handle options."""
 
     async def async_step_init(

@@ -66,7 +66,7 @@ from .typing import UNDEFINED, StateType, UndefinedType
 timer = time.time
 
 if TYPE_CHECKING:
-    from .entity_platform import EntityPlatform
+    from .entity_platform import EntityPlatform, PlatformData
 
 _LOGGER = logging.getLogger(__name__)
 SLOW_UPDATE_WARNING = 10
@@ -263,8 +263,6 @@ class CalculatedState:
     state: str
     # The union of all attributes, after overriding with entity registry settings
     attributes: dict[str, Any]
-    # Capability attributes returned by the capability_attributes property
-    capability_attributes: Mapping[str, Any] | None
 
 
 class CachedProperties(type):
@@ -449,6 +447,7 @@ class Entity(
     # While not purely typed, it makes typehinting more useful for us
     # and removes the need for constant None checks or asserts.
     platform: EntityPlatform = None  # type: ignore[assignment]
+    platform_data: PlatformData = None  # type: ignore[assignment]
 
     # Entity description instance for this Entity
     entity_description: EntityDescription
@@ -593,7 +592,7 @@ class Entity(
             return not self._attr_name
         if (
             name_translation_key := self._name_translation_key
-        ) and name_translation_key in self.platform.platform_translations:
+        ) and name_translation_key in self.platform_data.platform_translations:
             return False
         if hasattr(self, "entity_description"):
             return not self.entity_description.name
@@ -616,9 +615,9 @@ class Entity(
         if not self.has_entity_name:
             return None
         device_class_key = self.device_class or "_"
-        platform = self.platform
+        platform_domain = self.platform_data.domain
         name_translation_key = (
-            f"component.{platform.domain}.entity_component.{device_class_key}.name"
+            f"component.{platform_domain}.entity_component.{device_class_key}.name"
         )
         return component_translations.get(name_translation_key)
 
@@ -626,13 +625,13 @@ class Entity(
     def _object_id_device_class_name(self) -> str | None:
         """Return a translated name of the entity based on its device class."""
         return self._device_class_name_helper(
-            self.platform.object_id_component_translations
+            self.platform_data.object_id_component_translations
         )
 
     @cached_property
     def _device_class_name(self) -> str | None:
         """Return a translated name of the entity based on its device class."""
-        return self._device_class_name_helper(self.platform.component_translations)
+        return self._device_class_name_helper(self.platform_data.component_translations)
 
     def _default_to_device_class_name(self) -> bool:
         """Return True if an unnamed entity should be named by its device class."""
@@ -643,9 +642,9 @@ class Entity(
         """Return translation key for entity name."""
         if self.translation_key is None:
             return None
-        platform = self.platform
+        platform_data = self.platform_data
         return (
-            f"component.{platform.platform_name}.entity.{platform.domain}"
+            f"component.{platform_data.platform_name}.entity.{platform_data.domain}"
             f".{self.translation_key}.name"
         )
 
@@ -654,14 +653,14 @@ class Entity(
         """Return translation key for unit of measurement."""
         if self.translation_key is None:
             return None
-        if self.platform is None:
+        if self.platform_data is None:
             raise ValueError(
                 f"Entity {type(self)} cannot have a translation key for "
                 "unit of measurement before being added to the entity platform"
             )
-        platform = self.platform
+        platform_data = self.platform_data
         return (
-            f"component.{platform.platform_name}.entity.{platform.domain}"
+            f"component.{platform_data.platform_name}.entity.{platform_data.domain}"
             f".{self.translation_key}.unit_of_measurement"
         )
 
@@ -724,13 +723,13 @@ class Entity(
             # value.
             type.__getattribute__(self.__class__, "name")
             is type.__getattribute__(Entity, "name")
-            # The check for self.platform guards against integrations not using an
-            # EntityComponent and can be removed in HA Core 2024.1
-            and self.platform
+            # The check for self.platform_data guards against integrations not using an
+            # EntityComponent and can be removed in HA Core 2026.8
+            and self.platform_data
         ):
             name = self._name_internal(
                 self._object_id_device_class_name,
-                self.platform.object_id_platform_translations,
+                self.platform_data.object_id_platform_translations,
             )
         else:
             name = self.name
@@ -739,13 +738,13 @@ class Entity(
     @cached_property
     def name(self) -> str | UndefinedType | None:
         """Return the name of the entity."""
-        # The check for self.platform guards against integrations not using an
-        # EntityComponent and can be removed in HA Core 2024.1
-        if not self.platform:
+        # The check for self.platform_data guards against integrations not using an
+        # EntityComponent and can be removed in HA Core 2026.8
+        if not self.platform_data:
             return self._name_internal(None, {})
         return self._name_internal(
             self._device_class_name,
-            self.platform.platform_translations,
+            self.platform_data.platform_translations,
         )
 
     @cached_property
@@ -986,7 +985,7 @@ class Entity(
             raise RuntimeError(f"Attribute hass is None for {self}")
 
         # The check for self.platform guards against integrations not using an
-        # EntityComponent and can be removed in HA Core 2024.1
+        # EntityComponent and can be removed in HA Core 2026.8
         if self.platform is None and not self._no_platform_reported:  # type: ignore[unreachable]
             report_issue = self._suggest_report_issue()  # type: ignore[unreachable]
             _LOGGER.warning(
@@ -1060,8 +1059,8 @@ class Entity(
     @callback
     def _async_calculate_state(self) -> CalculatedState:
         """Calculate state string and attribute mapping."""
-        state, attr, capabilities, _, _ = self.__async_calculate_state()
-        return CalculatedState(state, attr, capabilities)
+        state, attr, _, _, _ = self.__async_calculate_state()
+        return CalculatedState(state, attr)
 
     def __async_calculate_state(
         self,
@@ -1351,6 +1350,7 @@ class Entity(
 
         self.hass = hass
         self.platform = platform
+        self.platform_data = platform.platform_data
         self.parallel_updates = parallel_updates
         self._platform_state = EntityPlatformState.ADDING
 
@@ -1494,7 +1494,7 @@ class Entity(
         Not to be extended by integrations.
         """
         # The check for self.platform guards against integrations not using an
-        # EntityComponent and can be removed in HA Core 2024.1
+        # EntityComponent and can be removed in HA Core 2026.8
         if self.platform:
             del entity_sources(self.hass)[self.entity_id]
 
@@ -1553,7 +1553,9 @@ class Entity(
         # Clear the remove future to handle entity added again after entity id change
         self.__remove_future = None
         self._platform_state = EntityPlatformState.NOT_ADDED
-        await self.platform.async_add_entities([self])
+        await self.platform.async_add_entities(
+            [self], config_subentry_id=registry_entry.config_subentry_id
+        )
 
     @callback
     def _async_unsubscribe_device_updates(self) -> None:
@@ -1626,9 +1628,9 @@ class Entity(
 
     def _suggest_report_issue(self) -> str:
         """Suggest to report an issue."""
-        # The check for self.platform guards against integrations not using an
-        # EntityComponent and can be removed in HA Core 2024.1
-        platform_name = self.platform.platform_name if self.platform else None
+        # The check for self.platform_data guards against integrations not using an
+        # EntityComponent and can be removed in HA Core 2026.8
+        platform_name = self.platform_data.platform_name if self.platform_data else None
         return async_suggest_report_issue(
             self.hass, integration_domain=platform_name, module=type(self).__module__
         )
